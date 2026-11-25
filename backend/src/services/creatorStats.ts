@@ -24,71 +24,52 @@ export interface CreatorStats {
   currencies: CurrencyStats[];
 }
 
-interface CurrencyAggregate {
-  currency: string;
-  _count: { _all: number };
-  _sum: { amount: MoneyValue | null };
-  _avg: { amount: MoneyValue | null };
-  _max: { amount: MoneyValue | null };
+interface StatsAggregate {
+  // Donation.currency is NOT NULL; null identifies the overall grouping set.
+  currency: string | null;
+  donationCount: bigint;
+  uniqueSupporters: bigint;
+  total: MoneyValue | null;
+  average: MoneyValue | null;
+  largest: MoneyValue | null;
 }
 
-interface SupporterGroup {
-  currency: string;
-  senderAddress: string;
-}
-
-/** Combines the two grouped queries into the response shape. Pure, so it's easy to test. */
-export function buildCreatorStats(
-  byCurrency: CurrencyAggregate[],
-  bySupporter: SupporterGroup[]
-): CreatorStats {
-  const supportersByCurrency = new Map<string, Set<string>>();
-  const allSupporters = new Set<string>();
-  for (const row of bySupporter) {
-    allSupporters.add(row.senderAddress);
-    const set = supportersByCurrency.get(row.currency) ?? new Set<string>();
-    set.add(row.senderAddress);
-    supportersByCurrency.set(row.currency, set);
-  }
-
-  const currencies = byCurrency
+/** Converts database aggregates to the existing JSON response shape. */
+export function buildCreatorStats(rows: StatsAggregate[]): CreatorStats {
+  const overall = rows.find((row) => row.currency === null);
+  const currencies = rows
+    .filter((row): row is StatsAggregate & { currency: string } => row.currency !== null)
     .map((row) => ({
       currency: row.currency,
-      total: toAmount(row._sum.amount),
-      donationCount: row._count._all,
-      uniqueSupporters: supportersByCurrency.get(row.currency)?.size ?? 0,
-      average: toAmount(row._avg.amount),
-      largest: toAmount(row._max.amount),
+      total: toAmount(row.total),
+      donationCount: Number(row.donationCount),
+      uniqueSupporters: Number(row.uniqueSupporters),
+      average: toAmount(row.average),
+      largest: toAmount(row.largest),
     }))
     .sort((a, b) => a.currency.localeCompare(b.currency));
 
   return {
-    donationCount: currencies.reduce((sum, c) => sum + c.donationCount, 0),
-    uniqueSupporters: allSupporters.size,
+    donationCount: Number(overall?.donationCount ?? 0),
+    uniqueSupporters: Number(overall?.uniqueSupporters ?? 0),
     currencies,
   };
 }
 
 /** Loads dashboard metrics for a creator from verified donations only. */
 export async function getCreatorStats(creatorId: number): Promise<CreatorStats> {
-  const where = { creatorId, verified: true };
-  const [byCurrency, bySupporter] = await Promise.all([
-    prisma.donation.groupBy({
-      by: ["currency"],
-      where,
-      _count: { _all: true },
-      _sum: { amount: true },
-      _avg: { amount: true },
-      _max: { amount: true },
-    }),
-    prisma.donation.groupBy({
-      by: ["currency", "senderAddress"],
-      where,
-    }),
-  ]);
-
-  return buildCreatorStats(
-    byCurrency as unknown as CurrencyAggregate[],
-    bySupporter as unknown as SupporterGroup[]
-  );
+  // Count distinct senders in Postgres, including across currencies. Returning
+  // one row per currency plus the overall row keeps application memory O(currencies),
+  // independent of supporter count. Both views use the same statement snapshot.
+  // The existing (creatorId, verified, createdAt) index supports these filters.
+  const rows = await prisma.$queryRaw<StatsAggregate[]>`
+    SELECT "currency", COUNT(*) AS "donationCount",
+           COUNT(DISTINCT "senderAddress") AS "uniqueSupporters",
+           SUM("amount") AS "total", AVG("amount") AS "average",
+           MAX("amount") AS "largest"
+    FROM "Donation"
+    WHERE "creatorId" = ${creatorId} AND "verified" = true
+    GROUP BY GROUPING SETS (("currency"), ())
+  `;
+  return buildCreatorStats(rows);
 }

@@ -40,6 +40,22 @@ It is built with TypeScript, Express, and Prisma, and is designed to support cre
    http://localhost:4000/health
    ```
 
+## Creator statistics
+
+Creator statistics aggregate verified donations in PostgreSQL with one query.
+`COUNT(DISTINCT senderAddress)` is computed per currency and across all currencies,
+so a supporter who donates in multiple assets is counted once overall. Monetary
+aggregates keep database decimal precision until conversion to JSON numbers.
+Only one row per currency plus an overall row reaches the application: memory
+use grows with the number of currencies, not donations or supporters. The existing
+`Donation(creatorId, verified, createdAt)` index supports the equality filters;
+no additional index or migration is required.
+
+The Postgres integration suite compares the results with the previous aggregation
+for more than 12,000 donations, including repeated and cross-currency supporters,
+unverified donations, another creator, and empty results. It also checks that the
+service executes one query returning only aggregate rows.
+
 ## Token claims and compatibility
 
 Tokens are signed with HS256 and carry `iss: support-me` and

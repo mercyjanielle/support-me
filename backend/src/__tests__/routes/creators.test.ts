@@ -734,20 +734,12 @@ describe("GET /api/creators/me/stats (#224)", () => {
 
   it("aggregates only the creator's verified donations", async () => {
     mockedPrisma.creator.findUnique.mockResolvedValue({ id: 5, userId: 1, username: "bob" });
-    mockedPrisma.donation.groupBy
-      .mockResolvedValueOnce([
-        {
-          currency: "XLM",
-          _count: { _all: 2 },
-          _sum: { amount: new Prisma.Decimal("30") },
-          _avg: { amount: new Prisma.Decimal("15") },
-          _max: { amount: new Prisma.Decimal("25") },
-        },
-      ])
-      .mockResolvedValueOnce([
-        { currency: "XLM", senderAddress: "GA" },
-        { currency: "XLM", senderAddress: "GB" },
-      ]);
+    mockedPrisma.$queryRaw.mockResolvedValue([
+      { currency: "XLM", donationCount: 2n, uniqueSupporters: 2n,
+        total: new Prisma.Decimal("30"), average: new Prisma.Decimal("15"), largest: new Prisma.Decimal("25") },
+      { currency: null, donationCount: 2n, uniqueSupporters: 2n,
+        total: new Prisma.Decimal("30"), average: new Prisma.Decimal("15"), largest: new Prisma.Decimal("25") },
+    ]);
 
     const res = await request(app)
       .get("/api/creators/me/stats")
@@ -768,9 +760,7 @@ describe("GET /api/creators/me/stats (#224)", () => {
         },
       ],
     });
-    for (const call of mockedPrisma.donation.groupBy.mock.calls) {
-      expect(call[0].where).toEqual({ creatorId: 5, verified: true });
-    }
+    expect(mockedPrisma.$queryRaw).toHaveBeenCalledWith(expect.any(Array), 5);
   });
 });
 

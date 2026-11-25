@@ -1,0 +1,55 @@
+name: Issue 496 validation
+on:
+  push:
+    branches: [validation/496-creator-stats-20261125]
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+        shell: bash
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/supportme?schema=public
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: supportme
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test -- --runInBand
+      - run: npm run test:integration
+      - name: Prove baseline loads supporter groups
+        run: |
+          cp src/services/creatorStats.ts /tmp/creatorStats-current.ts
+          trap 'cp /tmp/creatorStats-current.ts src/services/creatorStats.ts' EXIT
+          git show 5486be8347f34c964e627b2a4f967041c8cafa7b:backend/src/services/creatorStats.ts > src/services/creatorStats.ts
+          set +e
+          npm run test:integration -- creatorStats.integration.ts > /tmp/baseline.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/baseline.log
+          test "$result" -ne 0
+          grep -F '1 failed, 1 passed' /tmp/baseline.log
