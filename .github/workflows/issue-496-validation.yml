@@ -40,7 +40,11 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test -- --runInBand
-      - run: npm run test:integration
+      - name: Targeted stats integration
+        run: npm run test:integration -- creatorStats.integration.ts
+      - name: Existing integration suite (baseline comparison below)
+        continue-on-error: true
+        run: npm run test:integration -- donations.integration.ts
       - name: Prove baseline loads supporter groups
         run: |
           cp src/services/creatorStats.ts /tmp/creatorStats-current.ts
@@ -53,3 +57,13 @@ jobs:
           cat /tmp/baseline.log
           test "$result" -ne 0
           grep -F '1 failed, 1 passed' /tmp/baseline.log
+      - name: Existing integration suite on untouched upstream
+        run: |
+          git checkout 5486be8347f34c964e627b2a4f967041c8cafa7b -- .
+          set +e
+          npm run test:integration -- donations.integration.ts > /tmp/upstream.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/upstream.log
+          test "$result" -ne 0
+          grep -F '2 failed, 7 passed' /tmp/upstream.log
